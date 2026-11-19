@@ -112,6 +112,11 @@ sudo chmod 700 /opt/xmpp-news-bot
 
 ## 第三步：从 GitHub 克隆项目
 
+如果没装git，那么：
+```
+sudo apt update
+sudo apt install -y git
+```
 将下面的仓库地址替换成实际 GitHub 仓库地址：
 
 ```bash
