@@ -20,7 +20,7 @@
 
 ```text
 xmpp-news-bot/
-├── botka.py           # 机器人主程序
+├── newsbot.py           # 机器人主程序
 ├── requirements.txt   # Python 依赖
 ├── .gitignore         # Git 忽略规则
 └── bot_state.json     # 运行时状态文件（自动初始化，不应公开提交）
@@ -132,7 +132,7 @@ cd /opt/xmpp-news-bot
 ls -la
 ```
 
-确认存在 `botka.py` 和 `requirements.txt`。
+确认存在 `newsbot.py` 和 `requirements.txt`。
 
 ## 第四步：创建 Python 虚拟环境
 
@@ -185,7 +185,7 @@ sudo -u botuser /opt/xmpp-news-bot/venv/bin/pip install \
 打开主程序：
 
 ```bash
-sudo nano /opt/xmpp-news-bot/botka.py
+sudo nano /opt/xmpp-news-bot/newsbot.py
 ```
 
 找到代码中的配置区域，按照注释填写自己的信息。
@@ -212,7 +212,7 @@ sudo nano /opt/xmpp-news-bot/botka.py
 3. 自动更新时间使用 VPS 的系统时区。
 4. XMPP 账号、密码和其他私密配置不能提交到公开 GitHub 仓库。
 
-**安全提醒：** 如果当前版本将账号密码直接写在 `botka.py` 中，请确保公开版本中的凭据已经替换为占位符。更推荐后续将私密配置迁移到独立配置文件或环境变量中，并将其加入 `.gitignore`。
+**安全提醒：** 如果当前版本将账号密码直接写在 `newsbot.py` 中，请确保公开版本中的凭据已经替换为占位符。更推荐后续将私密配置迁移到独立配置文件或环境变量中，并将其加入 `.gitignore`。
 
 ## 第七步：检查代码语法
 
@@ -221,7 +221,7 @@ sudo nano /opt/xmpp-news-bot/botka.py
 ```bash
 sudo -u botuser \
     /opt/xmpp-news-bot/venv/bin/python \
-    -m py_compile /opt/xmpp-news-bot/botka.py
+    -m py_compile /opt/xmpp-news-bot/newsbot.py
 ```
 
 没有输出通常表示语法检查通过。
@@ -232,7 +232,7 @@ sudo -u botuser \
 
 ```bash
 sudo -u botuser bash -c \
-    'cd /opt/xmpp-news-bot && exec ./venv/bin/python -u botka.py'
+    'cd /opt/xmpp-news-bot && exec ./venv/bin/python -u newsbot.py'
 ```
 
 检查：
@@ -272,7 +272,7 @@ Group=botuser
 
 WorkingDirectory=/opt/xmpp-news-bot
 
-ExecStart=/opt/xmpp-news-bot/venv/bin/python -u /opt/xmpp-news-bot/botka.py
+ExecStart=/opt/xmpp-news-bot/venv/bin/python -u /opt/xmpp-news-bot/newsbot.py
 
 Restart=always
 RestartSec=10
@@ -562,3 +562,5 @@ sudo ls -l /opt/xmpp-news-bot/bot_state.json
 订阅内容的版权、使用条件及访问限制由各原始来源决定。使用者应遵守相关网站的服务条款和适用法律。
 
 欢迎提交 Issue、反馈问题和改进建议。
+
+代码及本README 由gpt生成
