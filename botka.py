@@ -58,7 +58,7 @@ CHANNEL_NAMES: Dict[str, str] = {
 # ══════════════════════════════════════════════════════════════
 
 RSS_FEEDS = {
-    "竹新社": "https://rsshub.rssforever.com/telegram/channel/tnews365?utm_source=chatgpt.com",
+    "竹新社": "https://rsshub.rssforever.com/telegram/channel/tnews365",
     
 }
 
@@ -255,37 +255,105 @@ class NewsBot(slixmpp.ClientXMPP):
     # ── 静默初始化 ────────────────────────────────────────────
     async def _init_all_channels(self):
         """
-        启动时对所有频道做一次无声扫描：
-        - 已有 last_id 的频道 → 保持不变（重连后继续从上次位置推送）
-        - 没有 last_id 的频道 → 记录当前最新消息 ID，但不推送任何内容
-        完成后解锁 /up 和定时推送。
+        启动时静默初始化 Telegram 和 RSS 状态。
+        已有记录的来源保持原有进度。
+        新来源只记录当前文章，不推送历史内容。
         """
         loop = asyncio.get_event_loop()
         changed = False
+
+        # ══════════════════════════════════════════════════════
+        # Telegram 静默初始化（保留原有逻辑）
+        # ══════════════════════════════════════════════════════
+
         for channel in TELEGRAM_CHANNELS:
+
             if channel in self._last_ids:
-                logging.info(f"[{channel}] 已有记录 last_id={self._last_ids[channel]}，跳过初始化")
+                logging.info(
+                    f"[{channel}] 已有记录 last_id="
+                    f"{self._last_ids[channel]}，跳过初始化"
+                )
                 continue
+
             try:
-                msgs = await loop.run_in_executor(None, scrape_channel, channel, 0)
+                msgs = await loop.run_in_executor(
+                    None, scrape_channel, channel, 0
+                )
+
                 if msgs:
                     max_id = max(m.msg_id for m in msgs)
                     self._last_ids[channel] = max_id
-                    logging.info(f"[{channel}] 静默初始化 last_id={max_id}（不推送历史消息）")
+
+                    logging.info(
+                        f"[{channel}] 静默初始化 last_id={max_id}"
+                    )
                 else:
                     self._last_ids[channel] = 0
-                    logging.warning(f"[{channel}] 静默初始化未获取到消息，last_id 设为 0")
+
+                    logging.warning(
+                        f"[{channel}] 未获取到消息，last_id 设为 0"
+                    )
+
                 changed = True
+
             except Exception as e:
-                logging.error(f"[{channel}] 静默初始化失败: {e}")
+                logging.error(
+                    f"[{channel}] 静默初始化失败: {e}"
+                )
+
+        # ══════════════════════════════════════════════════════
+        # RSS 静默初始化（新增）
+        # ══════════════════════════════════════════════════════
+
+        rss_seen = self._state.setdefault("rss_seen", {})
+
+        for feed_name, feed_url in RSS_FEEDS.items():
+
+            if feed_name in rss_seen:
+                logging.info(
+                    f"[RSS:{feed_name}] 已有记录，跳过初始化"
+                )
+                continue
+
+            try:
+                msgs = await loop.run_in_executor(
+                    None,
+                    scrape_rss,
+                    feed_name,
+                    feed_url
+                )
+
+                rss_seen[feed_name] = [
+                    m.item_id for m in msgs
+                ][:200]
+
+                logging.info(
+                    f"[RSS:{feed_name}] 静默初始化完成，"
+                    f"记录 {len(rss_seen[feed_name])} 篇文章"
+                )
+
+                changed = True
+
+            except Exception as e:
+                logging.error(
+                    f"[RSS:{feed_name}] 静默初始化失败: {e}"
+                )
+
+        # ══════════════════════════════════════════════════════
+        # 保存状态
+        # ══════════════════════════════════════════════════════
 
         if changed:
             self._state["last_ids"] = self._last_ids
+            self._state["rss_seen"] = rss_seen
             save_state(self._state)
 
         self._initialized = True
-        logging.info("✅ 所有频道初始化完成，/up 和定时推送已就绪")
 
+        logging.info(
+            "所有 Telegram 和 RSS 来源初始化完成，"
+            "/up 和定时推送已就绪"
+        )
     # ── 消息处理 ──────────────────────────────────────────────
     async def on_group_message(self, msg):
         if msg["from"].bare != ROOM_JID:
@@ -656,76 +724,25 @@ def format_tg_message(msg: TGMessage) -> str:
 # ══════════════════════════════════════════════════════════════
 async def run_bot():
     # 跨实例共享的状态，重连时新实例直接继承，不丢失进度
-# 跨实例共享的状态，重连时新实例直接继承，不丢失进度
-shared_state = load_state()
+    shared_state = load_state()
 
-# 确保 Telegram 和 RSS 状态均存在
-shared_state.setdefault("last_ids", {})
-shared_state.setdefault("rss_seen", {})
+    # 确保 Telegram 和 RSS 状态均存在
+    shared_state.setdefault("last_ids", {})
+    shared_state.setdefault("rss_seen", {})
 
-# Telegram 消息 ID
-shared_last_ids = shared_state["last_ids"]
+    # Telegram 消息 ID
+    shared_last_ids = shared_state["last_ids"]
 
-# /up 指令限速器
-up_limiter = RateLimiter(
-    UP_MAX_COUNT,
-    UP_TIME_WINDOW,
-    UP_COOLDOWN
-)
+    # /up 指令限速器
+    up_limiter = RateLimiter(
+        UP_MAX_COUNT,
+        UP_TIME_WINDOW,
+        UP_COOLDOWN
+    )
 
     reconnect_delay      = 5.0
     max_delay            = 120.0
     consecutive_failures = 0
-
-    while True:
-        bot: Optional[NewsBot] = None
-        try:
-            logging.info("🤖 正在启动机器人…")
-            bot = NewsBot(shared_state, shared_last_ids, up_limiter)
-            bot.register_plugin("xep_0030")
-            bot.register_plugin("xep_0045")
-
-            connected = bot.connect()
-            if not connected:
-                raise ConnectionError("服务器拒绝连接")
-
-            logging.info("✅ 正在连接服务器，等待会话建立…")
-            consecutive_failures = 0
-            reconnect_delay      = 5.0
-
-            # 阻塞直到本次连接完全断开
-            await bot.disconnected
-
-        except ConnectionError as e:
-            logging.error(f"❌ {e}")
-            consecutive_failures += 1
-
-        except asyncio.CancelledError:
-            logging.info("收到取消信号，退出…")
-            if bot:
-                bot.safe_disconnect()
-            break
-
-        except Exception as e:
-            logging.error(f"❌ 主循环异常: {type(e).__name__}: {e}", exc_info=True)
-            consecutive_failures += 1
-
-        finally:
-            # 彻底销毁旧实例后再重连，防止双实例并发
-            if bot:
-                bot.safe_disconnect()
-                await asyncio.sleep(2)
-                del bot
-                gc.collect()
-
-        if consecutive_failures > 0:
-            reconnect_delay = min(reconnect_delay * 1.5, max_delay)
-            logging.warning(
-                f"⏰ {int(reconnect_delay)}s 后重连（连续失败 {consecutive_failures} 次）"
-            )
-
-        await asyncio.sleep(reconnect_delay)
-
 # ══════════════════════════════════════════════════════════════
 # 主入口
 # ══════════════════════════════════════════════════════════════
