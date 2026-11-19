@@ -136,10 +136,21 @@ def load_state() -> dict:
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                state = json.load(f)
+
+                # 兼容旧版本状态文件
+                state.setdefault("last_ids", {})
+                state.setdefault("rss_seen", {})
+
+                return state
+
         except Exception as e:
             logging.warning(f"加载状态文件失败: {e}")
-    return {"last_ids": {}}
+
+    return {
+        "last_ids": {},
+        "rss_seen": {}
+    }
 
 def save_state(state: dict) -> None:
     try:
@@ -356,6 +367,82 @@ class NewsBot(slixmpp.ClientXMPP):
                     self._state["last_ids"] = self._last_ids
                     save_state(self._state)
                     logging.info(f"[{channel}] last_id 更新为 {channel_max_id}")
+            # ══════════════════════════════════════════════════════
+            # RSS 更新
+            # ══════════════════════════════════════════════════════
+
+            rss_seen = self._state.setdefault("rss_seen", {})
+
+            for feed_name, feed_url in RSS_FEEDS.items():
+
+                try:
+                    msgs = await loop.run_in_executor(
+                        None,
+                        scrape_rss,
+                        feed_name,
+                        feed_url
+                    )
+
+                    if not msgs:
+                        logging.info(
+                            f"[RSS:{feed_name}] 没有获取到文章"
+                        )
+                        continue
+
+                    # 获取该订阅源已经处理过的文章 ID
+                    seen_list = rss_seen.get(feed_name, [])
+                    seen = set(seen_list)
+
+                    # 筛选新文章
+                    new_msgs = [
+                        m for m in msgs
+                        if m.item_id not in seen
+                    ]
+
+                    if not new_msgs:
+                        logging.info(
+                            f"[RSS:{feed_name}] 没有新文章"
+                        )
+                        continue
+
+                    # 按从旧到新的顺序推送
+                    new_msgs.reverse()
+
+                    # 限制单次补发数量
+                    if len(new_msgs) > MAX_RSS_CATCHUP_MSGS:
+                        new_msgs = new_msgs[-MAX_RSS_CATCHUP_MSGS:]
+
+                    logging.info(
+                        f"[RSS:{feed_name}] "
+                        f"发现 {len(new_msgs)} 篇新文章"
+                    )
+
+                    for m in new_msgs:
+
+                        self._send_room(format_rss_message(m))
+
+                        total_sent += 1
+
+                        # 记录已推送文章
+                        if m.item_id not in seen:
+                            seen_list.append(m.item_id)
+                            seen.add(m.item_id)
+
+                        # 最多保留最近 200 条记录
+                        seen_list = seen_list[-200:]
+
+                        rss_seen[feed_name] = seen_list
+
+                        self._state["rss_seen"] = rss_seen
+                        save_state(self._state)
+
+                        await asyncio.sleep(MESSAGE_DELAY)
+
+                except Exception as e:
+                    logging.error(
+                        f"[RSS:{feed_name}] 更新异常: {e}",
+                        exc_info=True
+                    )
 
             if total_sent == 0 and manual:
                 no_update_replies = [
@@ -406,7 +493,113 @@ class NewsBot(slixmpp.ClientXMPP):
 def _append_unique(lst: List[str], item: str) -> None:
     if item and item not in lst:
         lst.append(item)
+def scrape_rss(feed_name: str, feed_url: str):
+    try:
+        resp = requests.get(
+            feed_url,
+            headers=HTTP_HEADERS,
+            timeout=FETCH_TIMEOUT
+        )
+        resp.raise_for_status()
 
+        feed = feedparser.parse(resp.content)
+
+        if feed.bozo and not feed.entries:
+            logging.error(
+                f"[RSS:{feed_name}] 解析失败: {feed.bozo_exception}"
+            )
+            return []
+
+        messages = []
+
+        for entry in feed.entries[:RSS_MAX_ITEMS]:
+
+            title = unescape(
+                BeautifulSoup(
+                    entry.get("title", ""),
+                    "html.parser"
+                ).get_text(" ", strip=True)
+            )
+
+            raw_summary = (
+                entry.get("summary")
+                or entry.get("description")
+                or ""
+            )
+
+            summary = BeautifulSoup(
+                raw_summary,
+                "html.parser"
+            ).get_text(" ", strip=True)
+
+            summary = unescape(summary)
+            summary = summary[:RSS_SUMMARY_LENGTH]
+
+            link = entry.get("link", "")
+
+            item_id = (
+                entry.get("id")
+                or entry.get("guid")
+                or link
+            )
+
+            if not item_id:
+                raw = title + summary
+                item_id = hashlib.sha256(
+                    raw.encode("utf-8")
+                ).hexdigest()
+
+            published = (
+                entry.get("published")
+                or entry.get("updated")
+                or ""
+            )
+
+            messages.append(
+                RSSMessage(
+                    source=feed_name,
+                    feed_url=feed_url,
+                    item_id=str(item_id),
+                    title=title,
+                    summary=summary,
+                    link=link,
+                    published=published
+                )
+            )
+
+        return messages
+
+    except Exception as e:
+        logging.error(
+            f"[RSS:{feed_name}] 获取失败: {e}"
+        )
+        return []
+def format_rss_message(msg: RSSMessage) -> str:
+    parts = [
+        f"📰 【RSS · {msg.source}】",
+        "",
+        f"📌 {msg.title}",
+    ]
+
+    if msg.published:
+        parts.extend([
+            "",
+            f"🕒 {msg.published}"
+        ])
+
+    if msg.summary:
+        parts.extend([
+            "",
+            msg.summary
+        ])
+
+    if msg.link:
+        parts.extend([
+            "",
+            f"🔗 {msg.link}"
+        ])
+
+    return "\n".join(parts)
 def scrape_channel(channel: str, after_id: int = 0) -> List[TGMessage]:
     url = f"https://t.me/s/{channel}"
     try:
@@ -463,9 +656,22 @@ def format_tg_message(msg: TGMessage) -> str:
 # ══════════════════════════════════════════════════════════════
 async def run_bot():
     # 跨实例共享的状态，重连时新实例直接继承，不丢失进度
-    shared_state    = load_state()
-    shared_last_ids = shared_state.get("last_ids", {})
-    up_limiter      = RateLimiter(UP_MAX_COUNT, UP_TIME_WINDOW, UP_COOLDOWN)
+# 跨实例共享的状态，重连时新实例直接继承，不丢失进度
+shared_state = load_state()
+
+# 确保 Telegram 和 RSS 状态均存在
+shared_state.setdefault("last_ids", {})
+shared_state.setdefault("rss_seen", {})
+
+# Telegram 消息 ID
+shared_last_ids = shared_state["last_ids"]
+
+# /up 指令限速器
+up_limiter = RateLimiter(
+    UP_MAX_COUNT,
+    UP_TIME_WINDOW,
+    UP_COOLDOWN
+)
 
     reconnect_delay      = 5.0
     max_delay            = 120.0
