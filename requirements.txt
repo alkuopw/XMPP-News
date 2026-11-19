@@ -1,2 +1,5 @@
 slixmpp
 requests
+beautifulsoup4
+feedparser
+lxml
