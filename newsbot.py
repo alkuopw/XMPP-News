@@ -34,24 +34,25 @@ from html import unescape
 # ══════════════════════════════════════════════════════════════
 # ★  基础配置（请务必修改）
 # ══════════════════════════════════════════════════════════════
-BOT_JID      = "bot@xmpp.example.com"                   # ← 修改成你的机器人JID
-BOT_PASSWORD = "your_password"                          # ← 修改成密码
-ROOM_JID     = "channel@conference.xmpp.example.com"   # ← 修改成群聊JID
-ROOM_NICK    = "HinaBot"                                # 机器人在群里的昵称
+BOT_JID      = "xxxx@xxx.xx"                   # ← 修改成你的机器人JID
+BOT_PASSWORD = "xxxxx"                          # ← 修改成密码
+ROOM_JID     = "xxxxxx@xxx.xxx.xx"   # ← 修改成群聊JID
+ROOM_NICK    = "xxxxxx"                                # 机器人在群里的昵称
 
 # ══════════════════════════════════════════════════════════════
 # ★  Telegram 频道列表
 # ══════════════════════════════════════════════════════════════
 TELEGRAM_CHANNELS: List[str] = [
-    "zhongguogongrenjiefangbao", 
-    "lilaoshibushinilaoshi", "YeHuoVideo", "gong_ge_news"
+    "zhongguogongrenjiefangbao","lilaoshibushinilaoshi",
+    "YeHuoVideo", "tagsrose","theinitium_rss","N98ks"
 ]
 CHANNEL_NAMES: Dict[str, str] = {
-    
     "zhongguogongrenjiefangbao": "中国工人解放报",
     "lilaoshibushinilaoshi":     "李老师不是你老师",
     "YeHuoVideo":                "野火",
-    "gong_ge_news":              "工人革命报",
+    "tagsrose":                  "翌日玫瑰",
+    "theinitium_rss":            "端传媒",
+    "N98ks":                     "中美日台新闻"
 }
 # ══════════════════════════════════════════════════════════════
 # ★ RSS / Atom 订阅列表
@@ -59,7 +60,10 @@ CHANNEL_NAMES: Dict[str, str] = {
 
 RSS_FEEDS = {
     "竹新社": "https://rsshub.rssforever.com/telegram/channel/tnews365",
-    
+    "中国数字时代": "https://chinadigitaltimes.net/chinese/feed",
+    "开源中国": "https://www.oschina.net/news/rss",
+    "LWN.net": "https://lwn.net/headlines/rss",
+    "GNU Project": "https://www.gnu.org/rss/whatsnew.rss"
 }
 
 MAX_RSS_CATCHUP_MSGS = 5
@@ -711,7 +715,7 @@ def scrape_channel(channel: str, after_id: int = 0) -> List[TGMessage]:
 
 def format_tg_message(msg: TGMessage) -> str:
     ch_name = CHANNEL_NAMES.get(msg.channel, msg.channel)
-    parts = [f"📢 【{ch_name}】 https://t.me/{msg.channel}/{msg.msg_id}"]
+    parts = [f"【{ch_name}】 https://t.me/{msg.channel}/{msg.msg_id}"]
     if msg.text:
         parts.extend(["", msg.text])
     ext_urls = [u for u in msg.urls if "t.me" not in urlparse(u).netloc]
@@ -721,7 +725,7 @@ def format_tg_message(msg: TGMessage) -> str:
 
 # ══════════════════════════════════════════════════════════════
 # 主循环（采用反刷屏机器人的连接架构）
-# ══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
 async def run_bot():
     # 跨实例共享的状态，重连时新实例直接继承，不丢失进度
     shared_state = load_state()
@@ -740,9 +744,77 @@ async def run_bot():
         UP_COOLDOWN
     )
 
-    reconnect_delay      = 5.0
-    max_delay            = 120.0
+    reconnect_delay = 5.0
+    max_delay = 120.0
     consecutive_failures = 0
+
+    while True:
+        bot: Optional[NewsBot] = None
+
+        try:
+            logging.info("🤖 正在启动机器人…")
+
+            bot = NewsBot(
+                shared_state,
+                shared_last_ids,
+                up_limiter
+            )
+
+            bot.register_plugin("xep_0030")
+            bot.register_plugin("xep_0045")
+
+            connected = bot.connect()
+
+            if not connected:
+                raise ConnectionError("服务器拒绝连接")
+
+            logging.info("✅ 正在连接服务器，等待会话建立…")
+
+            consecutive_failures = 0
+            reconnect_delay = 5.0
+
+            # 阻塞直到本次连接完全断开
+            await bot.disconnected
+
+        except ConnectionError as e:
+            logging.error(f"❌ {e}")
+            consecutive_failures += 1
+
+        except asyncio.CancelledError:
+            logging.info("收到取消信号，退出…")
+
+            if bot:
+                bot.safe_disconnect()
+
+            break
+
+        except Exception as e:
+            logging.error(
+                f"❌ 主循环异常: {type(e).__name__}: {e}",
+                exc_info=True
+            )
+            consecutive_failures += 1
+
+        finally:
+            # 彻底销毁旧实例后再重连，防止双实例并发
+            if bot:
+                bot.safe_disconnect()
+                await asyncio.sleep(2)
+                del bot
+                gc.collect()
+
+        if consecutive_failures > 0:
+            reconnect_delay = min(
+                reconnect_delay * 1.5,
+                max_delay
+            )
+
+            logging.warning(
+                f"⏰ {int(reconnect_delay)}s 后重连"
+                f"（连续失败 {consecutive_failures} 次）"
+            )
+
+        await asyncio.sleep(reconnect_delay)
 # ══════════════════════════════════════════════════════════════
 # 主入口
 # ══════════════════════════════════════════════════════════════
