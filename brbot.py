@@ -28,7 +28,9 @@ from dataclasses import dataclass, field
 import requests
 from bs4 import BeautifulSoup
 import slixmpp
-
+import feedparser
+import hashlib
+from html import unescape
 # ══════════════════════════════════════════════════════════════
 # ★  基础配置（请务必修改）
 # ══════════════════════════════════════════════════════════════
@@ -51,7 +53,18 @@ CHANNEL_NAMES: Dict[str, str] = {
     "YeHuoVideo":                "野火",
     "gong_ge_news":              "工人革命报",
 }
+# ══════════════════════════════════════════════════════════════
+# ★ RSS / Atom 订阅列表
+# ══════════════════════════════════════════════════════════════
 
+RSS_FEEDS = {
+    "竹新社": "https://rsshub.rssforever.com/telegram/channel/tnews365?utm_source=chatgpt.com",
+    
+}
+
+MAX_RSS_CATCHUP_MSGS = 5
+RSS_MAX_ITEMS = 100
+RSS_SUMMARY_LENGTH = 1200
 # ══════════════════════════════════════════════════════════════
 # ★  运行参数
 # ══════════════════════════════════════════════════════════════
@@ -84,7 +97,15 @@ class TGMessage:
     msg_id: int
     text: str
     urls: List[str]
-
+@dataclass
+class RSSMessage:
+    source: str
+    feed_url: str
+    item_id: str
+    title: str
+    summary: str
+    link: str
+    published: str
 @dataclass
 class RateLimiter:
     max_count: int
