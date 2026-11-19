@@ -54,7 +54,7 @@ xmpp-news-bot/
 - Linux 用户：`botuser`
 - 安装目录：`/opt/xmpp-news-bot`
 - Python 虚拟环境：`/opt/xmpp-news-bot/venv`
-- 主程序：`botka.py`
+- 主程序：`newsbot.py`
 - systemd 服务：`xmpp-news-bot`
 
 请根据自己的服务器情况调整。
